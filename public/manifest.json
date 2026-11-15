@@ -1,0 +1,23 @@
+{
+  "name": "REcombat",
+  "description": "Shared initiative, HP/AC on tokens, active-turn highlight and sword sound. Persistent combat for Owlbear Rodeo.",
+  "version": "1.0.0",
+  "manifest_version": 1,
+  "icon": "/icon.svg",
+  "author": "ToAlDo27",
+  "homepage_url": "https://github.com/ToAlDo27/REcombat",
+  "background_url": "/background.html",
+  "permissions": [
+    {
+      "name": "autoplay",
+      "reason": "Play a sword strike when the combat turn changes after the listener enables sound."
+    }
+  ],
+  "action": {
+    "title": "REcombat",
+    "icon": "/action.svg",
+    "popover": "/",
+    "width": 520,
+    "height": 680
+  }
+}
