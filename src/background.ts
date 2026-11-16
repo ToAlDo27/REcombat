@@ -1,16 +1,17 @@
 import OBR from "@owlbear-rodeo/sdk"
 import { store } from "./store"
 import { createOverlayRenderer } from "./overlays"
-import { SwordSound } from "./sword"
-import { AUDIO_CHANNEL, AUDIO_STATUS, readAudio } from "./audio"
+import { startLssIntegration } from "./lssIntegration"
+import { AUDIO_TURN } from "./audio"
 
 if (OBR.isAvailable) {
+  let stopLss: (() => void) | undefined
+  OBR.onReady(() => {
+    stopLss = startLssIntegration(store)
+  })
   const overlays = createOverlayRenderer()
-  const sound = new SwordSound()
-  let enabled = false
   let previousScene = ""
   let previousTurn = ""
-  let audioRevision = 0
   let initialized = false
   const stop = store.start()
   const update = () => {
@@ -33,47 +34,26 @@ if (OBR.isAvailable) {
     }
     if (previousTurn !== turn) {
       previousTurn = turn
-      if (enabled && snapshot.turn.active && snapshot.settings.sound) sound.play()
+      // User activation belongs to the visible audio iframe. This background
+      // only relays turn changes, so opening the action cannot double playback.
+      if (snapshot.turn.active && snapshot.settings.sound)
+        void OBR.broadcast
+          .sendMessage(
+            AUDIO_TURN,
+            { scene: snapshot.sceneKey, turn },
+            { destination: "LOCAL" },
+          )
+          .catch(() => undefined)
     }
   }
   const unsubscribe = store.subscribe(update)
-  OBR.onReady(() => {
-    const apply = async (value: unknown) => {
-      if (!value || typeof value !== "object") return
-      const revision = ++audioRevision
-      const preferences = value as { enabled?: unknown; volume?: unknown }
-      if (typeof preferences.volume === "number")
-        sound.setVolume(Math.max(0, Math.min(1, preferences.volume)))
-      if (preferences.enabled === true) {
-        try {
-          await sound.enable()
-          if (revision !== audioRevision) return
-          enabled = true
-          sound.mute(false)
-        } catch {
-          if (revision !== audioRevision) return
-          enabled = false
-        }
-      } else {
-        enabled = false
-        sound.mute(true)
-      }
-      await OBR.broadcast
-        .sendMessage(AUDIO_STATUS, { enabled }, { destination: "LOCAL" })
-        .catch(() => undefined)
-    }
-    OBR.broadcast.onMessage(AUDIO_CHANNEL, event => {
-      void apply(event.data)
-    })
-    void apply(readAudio())
-  })
   window.addEventListener(
     "pagehide",
     () => {
+      stopLss?.()
       unsubscribe()
       stop()
       void overlays.destroy()
-      sound.destroy()
     },
     { once: true },
   )

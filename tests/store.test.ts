@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import type { Item, Metadata, Player } from "@owlbear-rodeo/sdk"
 import { CombatStore, type CombatSDK } from "../src/store"
 import { PREFIX, type Command, type Operation } from "../src/types"
+import { TOKEN_DATA_KEY } from "../src/tokenData"
 
 type Callback<T> = (value: T) => void
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T
@@ -32,6 +33,8 @@ class SceneHub {
   heldWrites: (() => void)[] = []
   holdWrites = false
   failNext = false
+  failNextItems = false
+  itemWrites: Item[][] = []
   client(id: string, role: "GM" | "PLAYER" = "PLAYER") {
     const client = new Client(this, id, role)
     this.clients.push(client)
@@ -40,6 +43,19 @@ class SceneHub {
   broadcast() {
     for (const client of this.clients)
       for (const callback of client.metadataListeners) callback(clone(this.metadata))
+  }
+  updateItems(ids: string[], update: (draft: Item[]) => void): Promise<void> {
+    if (this.failNextItems) {
+      this.failNextItems = false
+      return Promise.reject(new Error("Токен временно недоступен"))
+    }
+    const draft = clone(this.items.filter(item => ids.includes(item.id)))
+    update(draft)
+    this.itemWrites.push(clone(draft))
+    this.items = this.items.map(item => draft.find(next => next.id === item.id) ?? item)
+    for (const client of this.clients)
+      for (const callback of client.itemListeners) callback(clone(this.items))
+    return Promise.resolve()
   }
   write(update: Metadata): Promise<void> {
     this.writes.push(clone(update))
@@ -124,6 +140,8 @@ class Client implements CombatSDK {
       listen(this.metadataListeners, callback),
     items: {
       getItems: async () => clone(this.hub.items),
+      updateItems: (ids: string[], update: (draft: Item[]) => void) =>
+        this.hub.updateItems(ids, update),
       onChange: (callback: Callback<Item[]>) => listen(this.itemListeners, callback),
     },
   }
@@ -174,6 +192,117 @@ const journal = (...ops: Operation[]): Metadata =>
 afterEach(() => disposers.splice(0).forEach(dispose => dispose()))
 
 describe("concurrent scene-backed CombatStore", () => {
+  it("saves token cards before battle, inherits their initiative and keeps combat edits on the token", async () => {
+    const hub = new SceneHub()
+    const gm = await makeStore(hub.client("gm", "GM"))
+    await gm.saveTokenProfile("a", {
+      name: "Паладин",
+      hp: 23,
+      maxHp: 30,
+      ac: 18,
+      bonus: 4,
+      initiative: 19,
+      faction: "pc",
+      rollMode: "advantage",
+      lss: {
+        characterId: "hero-1",
+        url: "https://longstoryshort.app/characters/digital/hero-1/",
+        sync: true,
+      },
+    })
+    expect(gm.getSnapshot().combatants).toEqual([])
+    await vi.waitFor(() =>
+      expect(hub.items[0].metadata[TOKEN_DATA_KEY]).toMatchObject({
+        schema: 1,
+        name: "Паладин",
+        hp: 23,
+        initiative: 19,
+      }),
+    )
+    const reloaded = await makeStore(hub.client("reload", "GM"))
+    await reloaded.addTokens([token("a")])
+    expect(reloaded.getSnapshot().combatants[0]).toMatchObject({
+      name: "Паладин",
+      hp: 23,
+      maxHp: 30,
+      initiative: 19,
+      bonus: 4,
+      rollMode: "advantage",
+      lss: { characterId: "hero-1" },
+    })
+    await gm.dispatch({ kind: "hp", id: "token:a", delta: -7 })
+    await gm.addTokens([token("a")], { initiative: "roll" })
+    expect(gm.getSnapshot().combatants[0].hp).toBe(16)
+    expect(gm.getSnapshot().combatants[0].initiative).toBe(19)
+    await vi.waitFor(() =>
+      expect(hub.items[0].metadata[TOKEN_DATA_KEY]).toMatchObject({ hp: 16 }),
+    )
+  })
+
+  it("merges concurrent card fields, rolls with per-token mode, and restores a removed participant", async () => {
+    const hub = new SceneHub()
+    const [alice, bob] = await Promise.all([
+      makeStore(hub.client("alice", "GM")),
+      makeStore(hub.client("bob", "GM")),
+    ])
+    hub.holdWrites = true
+    const edits = [
+      alice.saveTokenProfile("a", { name: "Mage", ac: 16 }),
+      bob.saveTokenProfile("a", { bonus: 5, rollMode: "disadvantage" }),
+    ]
+    hub.flush(true)
+    await Promise.all(edits)
+    expect(alice.getSnapshot().tokenProfiles.a).toMatchObject({
+      name: "Mage",
+      ac: 16,
+      bonus: 5,
+      rollMode: "disadvantage",
+    })
+    expect(bob.getSnapshot().tokenProfiles).toEqual(alice.getSnapshot().tokenProfiles)
+    hub.holdWrites = false
+    await alice.addTokens([token("a")], { initiative: "roll" })
+    expect(alice.getSnapshot().combatants[0]).toMatchObject({
+      initiative: 17,
+      lastRoll: { mode: "disadvantage" },
+    })
+    await bob.dispatch({
+      kind: "patch",
+      id: "token:a",
+      patch: { hp: 6, lss: null, rollMode: null },
+    })
+    await alice.roll("token:a")
+    expect(alice.getSnapshot().combatants[0].lastRoll?.mode).toBe("normal")
+    await bob.dispatch({ kind: "remove", id: "token:a" })
+    await alice.addTokens([token("a")], { initiative: "empty" })
+    expect(alice.getSnapshot().combatants[0]).toMatchObject({
+      hp: 6,
+      name: "Mage",
+      ac: 16,
+      initiative: null,
+    })
+  })
+
+  it("repairs token metadata from the journal after a failed token update and reload", async () => {
+    const hub = new SceneHub()
+    const store = await makeStore(hub.client("gm", "GM"))
+    hub.failNextItems = true
+    await store.saveTokenProfile("a", { name: "Durable", hp: 8 })
+    await vi.waitFor(() =>
+      expect(store.getSnapshot().error).toContain("Данные сохранены в сцене"),
+    )
+    expect(store.getSnapshot().tokenProfiles.a).toMatchObject({ name: "Durable", hp: 8 })
+    const reloaded = await makeStore(hub.client("new", "GM"))
+    await vi.waitFor(() =>
+      expect(hub.items[0].metadata[TOKEN_DATA_KEY]).toMatchObject({
+        name: "Durable",
+        hp: 8,
+      }),
+    )
+    expect(reloaded.getSnapshot().tokenProfiles).toEqual(
+      store.getSnapshot().tokenProfiles,
+    )
+  })
+
   it("merges 3 players adding tokens simultaneously and never writes a whole register", async () => {
     const hub = new SceneHub()
     const stores = await Promise.all(

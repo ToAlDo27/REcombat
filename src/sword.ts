@@ -5,6 +5,11 @@ export class SwordSound {
   private volume = 0.45
   private muted = false
   private enabled = false
+  onStateChange?: () => void
+
+  get isRunning(): boolean {
+    return this.enabled && this.context?.state === "running"
+  }
 
   async enable(): Promise<void> {
     const Audio =
@@ -14,11 +19,30 @@ export class SwordSound {
     if (!Audio) throw new Error("Браузер не поддерживает звук Web Audio")
     if (!this.context || this.context.state === "closed") {
       this.context = new Audio()
+      this.context.onstatechange = () => this.onStateChange?.()
       this.master = this.context.createGain()
       this.master.connect(this.context.destination)
       this.applyVolume()
     }
-    await this.context.resume()
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      await Promise.race([
+        this.context.resume(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () =>
+              reject(
+                new Error(
+                  "Нажмите кнопку звука ещё раз, чтобы разрешить воспроизведение",
+                ),
+              ),
+            4000,
+          )
+        }),
+      ])
+    } finally {
+      clearTimeout(timer)
+    }
     if (this.context.state !== "running")
       throw new Error("Нажмите кнопку звука ещё раз, чтобы разрешить воспроизведение")
     this.enabled = true

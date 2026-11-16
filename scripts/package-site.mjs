@@ -11,6 +11,7 @@ try {
 }
 copyFileSync("LICENSE", "dist/LICENSE.txt")
 const dependencies = [
+  "@longstoryshort/vtt-sdk",
   "@owlbear-rodeo/sdk",
   "events",
   "immer",

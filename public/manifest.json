@@ -1,7 +1,7 @@
 {
   "name": "REcombat",
-  "description": "Shared initiative, HP/AC on tokens, active-turn highlight and sword sound. Persistent combat for Owlbear Rodeo.",
-  "version": "1.0.0",
+  "description": "Shared initiative, persistent token cards, LSS character links and reliable sword audio for Owlbear Rodeo.",
+  "version": "1.1.0",
   "manifest_version": 1,
   "icon": "/icon.svg",
   "author": "ToAlDo27",

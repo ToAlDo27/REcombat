@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 import type { Item, Label, Path } from "@owlbear-rodeo/sdk"
 import { createOverlayRenderer } from "../src/overlays"
 import { PREFIX, type Snapshot } from "../src/types"
+import { tokenProfileFromCombatant } from "../src/tokenData"
 
 vi.mock("@owlbear-rodeo/sdk", () => ({ default: {} }))
 
@@ -12,6 +13,7 @@ function fixture(): Snapshot {
     pending: 0,
     sceneKey: "scene-a",
     opCount: 2,
+    tokenProfiles: {},
     actor: {
       id: "player",
       connectionId: "connection",
@@ -31,6 +33,7 @@ function fixture(): Snapshot {
       playersCanAdvance: false,
       hideNpcStats: false,
       rollMode: "normal",
+      tokenInitiative: "manual",
     },
     combatants: [
       {
@@ -116,6 +119,20 @@ function host(initial: Item[] = []) {
 
 describe("local token overlays", () => {
   beforeEach(() => vi.restoreAllMocks())
+
+  it("shows a configured token's HP/AC before combat and keeps it after roster removal", async () => {
+    const state = fixture()
+    state.tokenProfiles.one = tokenProfileFromCombatant(state.combatants[0])
+    state.combatants = []
+    state.turn.active = false
+    const mock = host()
+    const renderer = createOverlayRenderer(mock.sdk as never)
+    renderer.render(state)
+    await vi.waitFor(() => expect(mock.items()).toHaveLength(1))
+    expect((mock.items()[0] as Label).text.plainText).toBe("ХП 12/20  ·  КЗ 16")
+    expect(mock.items()[0].attachedTo).toBe("one")
+    await renderer.destroy()
+  })
 
   it("renders host-sized HP/AC and an attached halo without changing any shared token", async () => {
     const state = fixture()

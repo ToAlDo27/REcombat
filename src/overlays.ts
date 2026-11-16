@@ -5,6 +5,7 @@ import OBR, {
   type Path,
 } from "@owlbear-rodeo/sdk"
 import { PREFIX, type Snapshot } from "./types"
+import { normalizeTokenProfile, TOKEN_DATA_KEY } from "./tokenData"
 
 const MARKER = `${PREFIX}/overlay`
 type OverlaySdk = Pick<typeof OBR, "scene">
@@ -78,8 +79,30 @@ export function createOverlayRenderer(sdk: OverlaySdk = OBR) {
   async function build(snapshot: Snapshot) {
     const tokens = new Map(snapshot.items.map(item => [item.id, item]))
     const desired: Overlay[] = []
+    const participants = [...snapshot.combatants]
+    for (const token of snapshot.items) {
+      if (
+        token.type !== "IMAGE" ||
+        !["CHARACTER", "MOUNT"].includes(token.layer) ||
+        participants.some(c => c.tokenId === token.id)
+      )
+        continue
+      const saved = token.metadata[TOKEN_DATA_KEY]
+      const profile =
+        snapshot.tokenProfiles?.[token.id] ??
+        (saved && typeof saved === "object" && "schema" in saved && saved.schema === 1
+          ? normalizeTokenProfile(saved)
+          : null)
+      if (profile)
+        participants.push({
+          ...profile,
+          id: `profile:${token.id}`,
+          tokenId: token.id,
+          ownerId: token.createdUserId,
+        })
+    }
     await Promise.all(
-      snapshot.combatants.map(async combatant => {
+      participants.map(async combatant => {
         const token = combatant.tokenId ? tokens.get(combatant.tokenId) : undefined
         if (!token || (!token.visible && snapshot.actor?.role !== "GM")) return
         const hideStats =

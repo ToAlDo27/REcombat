@@ -15,17 +15,29 @@ export interface RollResult {
   sides: number
   mode: "normal" | "advantage" | "disadvantage"
 }
-export interface Combatant {
-  id: string
-  tokenId?: string
+export interface LssLink {
+  characterId: string
+  url: string
+  sync: boolean
+}
+export interface TokenProfile {
   name: string
-  ownerId: string
   initiative: number | null
   bonus: number
   hp: number
   maxHp: number
   ac: number
   faction: "pc" | "npc"
+  /** null/omitted follows the room setting. */
+  rollMode?: RollResult["mode"] | null
+  lss?: LssLink | null
+}
+export type TokenProfilePatch = Partial<TokenProfile>
+export type TokenInitiative = "manual" | "roll" | "empty"
+export interface Combatant extends TokenProfile {
+  id: string
+  tokenId?: string
+  ownerId: string
   lastRoll?: RollResult
 }
 export interface Settings {
@@ -39,6 +51,7 @@ export interface Settings {
   playersCanAdvance: boolean
   hideNpcStats: boolean
   rollMode: "normal" | "advantage" | "disadvantage"
+  tokenInitiative: TokenInitiative
 }
 export interface Turn {
   active: boolean
@@ -48,12 +61,14 @@ export interface Turn {
 }
 export interface CombatState {
   combatants: Combatant[]
+  tokenProfiles: Record<string, TokenProfile>
   settings: Settings
   turn: Turn
   opCount: number
 }
 export type Command =
-  | { kind: "add"; combatant: Combatant }
+  | { kind: "add"; combatant: Combatant; initiative?: TokenInitiative }
+  | { kind: "token"; tokenId: string; base: TokenProfile; patch: TokenProfilePatch }
   | { kind: "patch"; id: string; patch: Partial<Omit<Combatant, "id" | "tokenId">> }
   | { kind: "hp"; id: string; delta: number }
   | { kind: "remove"; id: string }

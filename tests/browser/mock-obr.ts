@@ -1,4 +1,4 @@
-import type { Item, Metadata, Player } from "@owlbear-rodeo/sdk"
+import type { Item, Metadata, Player, Popover } from "@owlbear-rodeo/sdk"
 // Keep real SDK builders and item geometry. Only its network transport is replaced.
 export * from "../../node_modules/@owlbear-rodeo/sdk/lib/index.js"
 
@@ -7,7 +7,20 @@ type Transport = Window & {
   __obrGetMetadata?: () => Promise<Metadata>
   __obrSetMetadata?: (patch: Metadata) => Promise<void>
   __obrGetItems?: () => Promise<Item[]>
-  __obrBroadcast?: (channel: string, data: unknown) => Promise<void>
+  __obrGetPlayers?: () => Promise<Player[]>
+  __obrUpdateItems?: (items: Item[]) => Promise<void>
+  __obrBroadcast?: (
+    channel: string,
+    data: unknown,
+    options?: { destination?: "LOCAL" | "REMOTE" | "ALL" },
+  ) => Promise<void>
+  __obrOpenPopover?: (popover: Popover) => Promise<void>
+  __obrClosePopover?: (id: string) => Promise<void>
+  __obrResizePopover?: (
+    id: string,
+    dimension: "width" | "height",
+    value: number,
+  ) => Promise<void>
 }
 const transport = window as Transport
 const query = new URLSearchParams(location.search)
@@ -16,6 +29,7 @@ const client = query.get("client") ?? "host"
 const metadataListeners = new Set<Handler<Metadata>>()
 const itemsListeners = new Set<Handler<Item[]>>()
 const readyListeners = new Set<Handler<boolean>>()
+const partyListeners = new Set<Handler<Player[]>>()
 const broadcasts = new Map<
   string,
   Set<Handler<{ data: unknown; connectionId: string }>>
@@ -42,6 +56,11 @@ const state = {
   writes: [] as Metadata[],
   localWrites: [] as { kind: string; ids: string[] }[],
   notifications: [] as string[],
+  players: [] as Player[],
+  receiveParty: (players: Player[]) => {
+    state.players = clone(players)
+    partyListeners.forEach(fn => fn(clone(players)))
+  },
   receiveMetadata: (metadata: Metadata) => {
     state.metadata = clone(metadata)
     metadataListeners.forEach(fn => fn(clone(state.metadata)))
@@ -67,6 +86,16 @@ const itemsApi = {
   onChange: (fn: Handler<Item[]>) => {
     itemsListeners.add(fn)
     return () => itemsListeners.delete(fn)
+  },
+  updateItems: async (ids: string[], update: (draft: Item[]) => void) => {
+    const latest = transport.__obrGetItems ? await transport.__obrGetItems() : state.items
+    const draft = clone(latest.filter(item => ids.includes(item.id)))
+    update(draft)
+    if (transport.__obrUpdateItems) await transport.__obrUpdateItems(draft)
+    else
+      state.receiveItems(
+        state.items.map(item => draft.find(next => next.id === item.id) ?? item),
+      )
   },
   getItemBounds: async (ids: string[]) => {
     const found = state.items.filter(item => ids.includes(item.id))
@@ -115,7 +144,16 @@ const OBR = {
     hasPermission: async () => true,
     onChange: noSubscription,
   },
-  party: { getPlayers: async () => [], onChange: noSubscription },
+  party: {
+    getPlayers: async () => {
+      if (transport.__obrGetPlayers) state.players = await transport.__obrGetPlayers()
+      return clone(state.players)
+    },
+    onChange: (fn: Handler<Player[]>) => {
+      partyListeners.add(fn)
+      return () => partyListeners.delete(fn)
+    },
+  },
   scene: {
     isReady: async () => state.ready,
     onReadyChange: (fn: Handler<boolean>) => {
@@ -140,6 +178,14 @@ const OBR = {
     grid: { getDpi: async () => 150 },
   },
   contextMenu: { create: noop, remove: noop },
+  popover: {
+    open: async (popover: Popover) => transport.__obrOpenPopover?.(popover),
+    close: async (id: string) => transport.__obrClosePopover?.(id),
+    setWidth: async (id: string, value: number) =>
+      transport.__obrResizePopover?.(id, "width", value),
+    setHeight: async (id: string, value: number) =>
+      transport.__obrResizePopover?.(id, "height", value),
+  },
   action: { setHeight: noop, setBadgeText: noop, setBadgeBackgroundColor: noop },
   notification: {
     show: async (message: string) => {
@@ -152,9 +198,14 @@ const OBR = {
   },
   viewport: { animateTo: noop },
   broadcast: {
-    sendMessage: async (channel: string, data: unknown) => {
-      if (transport.__obrBroadcast) await transport.__obrBroadcast(channel, data)
-      else state.receiveBroadcast(channel, { data, connectionId: client })
+    sendMessage: async (
+      channel: string,
+      data: unknown,
+      options?: { destination?: "LOCAL" | "REMOTE" | "ALL" },
+    ) => {
+      if (transport.__obrBroadcast) await transport.__obrBroadcast(channel, data, options)
+      else if (options?.destination === "LOCAL" || options?.destination === "ALL")
+        state.receiveBroadcast(channel, { data, connectionId: client })
     },
     onMessage: (
       channel: string,

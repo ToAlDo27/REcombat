@@ -6,6 +6,11 @@ import type {
   RollResult,
   Settings,
 } from "./types"
+import {
+  normalizeTokenPatch,
+  normalizeTokenProfile,
+  tokenProfileFromCombatant,
+} from "./tokenData"
 
 export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   diceSides: 20,
@@ -18,11 +23,13 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   playersCanAdvance: false,
   hideNpcStats: false,
   rollMode: "normal",
+  tokenInitiative: "manual",
 })
 
 export function emptyState(): CombatState {
   return {
     combatants: [],
+    tokenProfiles: {},
     settings: { ...DEFAULT_SETTINGS },
     turn: { active: false, combatantId: null, round: 1, eventId: null },
     opCount: 0,
@@ -99,7 +106,9 @@ function combatantPatch(
   value: unknown,
 ): Partial<Omit<Combatant, "id" | "tokenId">> | null {
   if (!record(value)) return null
-  const result: Partial<Omit<Combatant, "id" | "tokenId">> = {}
+  const tokenPatch = normalizeTokenPatch(value)
+  if (!tokenPatch) return null
+  const result: Partial<Omit<Combatant, "id" | "tokenId">> = { ...tokenPatch }
   if (own(value, "name")) {
     if (!text(value.name)) return null
     result.name = value.name
@@ -155,6 +164,15 @@ function settingsPatch(value: unknown): Partial<Settings> | null {
     if (!mode(value.rollMode)) return null
     result.rollMode = value.rollMode
   }
+  if (own(value, "tokenInitiative")) {
+    if (
+      value.tokenInitiative !== "manual" &&
+      value.tokenInitiative !== "roll" &&
+      value.tokenInitiative !== "empty"
+    )
+      return null
+    result.tokenInitiative = value.tokenInitiative
+  }
   for (const key of [
     "reverse",
     "showHp",
@@ -207,15 +225,30 @@ export function normalizeOperation(value: unknown): Operation | null {
       )
         return null
       if (c.tokenId !== undefined && !text(c.tokenId, 200)) return null
+      if (
+        value.initiative !== undefined &&
+        value.initiative !== "manual" &&
+        value.initiative !== "roll" &&
+        value.initiative !== "empty"
+      )
+        return null
       return {
         ...base,
         kind: "add",
+        ...(value.initiative ? { initiative: value.initiative } : {}),
         combatant: {
           ...patch,
           id: c.id,
           ...(c.tokenId ? { tokenId: c.tokenId } : {}),
         } as Combatant,
       }
+    }
+    case "token": {
+      const baseProfile = normalizeTokenProfile(value.base)
+      const patch = normalizeTokenPatch(value.patch)
+      return text(value.tokenId, 200) && baseProfile && patch
+        ? { ...base, kind: "token", tokenId: value.tokenId, base: baseProfile, patch }
+        : null
     }
     case "patch": {
       const patch = combatantPatch(value.patch)
@@ -279,6 +312,11 @@ export function reduceOperations(values: Iterable<unknown>): CombatState {
   }
   const state = emptyState()
   const roster = new Map<string, Combatant>()
+  const profiles = new Map<string, CombatState["tokenProfiles"][string]>()
+  const remember = (combatant: Combatant) => {
+    if (combatant.tokenId)
+      profiles.set(combatant.tokenId, tokenProfileFromCombatant(combatant))
+  }
   for (const op of [...byId.values()].sort(compareOperations)) {
     state.opCount++
     switch (op.kind) {
@@ -291,10 +329,20 @@ export function reduceOperations(values: Iterable<unknown>): CombatState {
             [...roster.values()].some(c => c.tokenId === op.combatant.tokenId)
           )
         ) {
-          roster.set(op.combatant.id, {
+          const profile = op.combatant.tokenId
+            ? profiles.get(op.combatant.tokenId)
+            : undefined
+          const combatant: Combatant = {
             ...op.combatant,
-            hp: Math.min(op.combatant.hp, op.combatant.maxHp),
-          })
+            ...profile,
+            ...(op.initiative === "roll"
+              ? { initiative: op.combatant.initiative, lastRoll: op.combatant.lastRoll }
+              : {}),
+            ...(op.initiative === "empty" ? { initiative: null } : {}),
+          }
+          combatant.hp = Math.min(combatant.hp, combatant.maxHp)
+          roster.set(combatant.id, combatant)
+          remember(combatant)
         }
         break
       }
@@ -304,12 +352,16 @@ export function reduceOperations(values: Iterable<unknown>): CombatState {
           Object.assign(c, op.patch)
           c.hp = Math.min(c.hp, c.maxHp)
           if (own(op.patch, "initiative") && !own(op.patch, "lastRoll")) delete c.lastRoll
+          remember(c)
         }
         break
       }
       case "hp": {
         const c = roster.get(op.id)
-        if (c) c.hp = Math.max(0, Math.min(c.maxHp, c.hp + op.delta))
+        if (c) {
+          c.hp = Math.max(0, Math.min(c.maxHp, c.hp + op.delta))
+          remember(c)
+        }
         break
       }
       case "roll": {
@@ -317,6 +369,18 @@ export function reduceOperations(values: Iterable<unknown>): CombatState {
         if (c) {
           c.initiative = op.result.total
           c.lastRoll = { ...op.result }
+          remember(c)
+        }
+        break
+      }
+      case "token": {
+        const profile = { ...(profiles.get(op.tokenId) ?? op.base), ...op.patch }
+        profile.hp = Math.min(profile.hp, profile.maxHp)
+        profiles.set(op.tokenId, profile)
+        for (const c of roster.values()) {
+          if (c.tokenId !== op.tokenId) continue
+          Object.assign(c, profile)
+          if (own(op.patch, "initiative")) delete c.lastRoll
         }
         break
       }
@@ -332,6 +396,7 @@ export function reduceOperations(values: Iterable<unknown>): CombatState {
         for (const c of roster.values()) {
           c.initiative = null
           delete c.lastRoll
+          remember(c)
         }
         break
       case "turn":
@@ -351,6 +416,7 @@ export function reduceOperations(values: Iterable<unknown>): CombatState {
     }
   }
   state.combatants = [...roster.values()]
+  state.tokenProfiles = Object.fromEntries(profiles)
   if (!state.combatants.length) {
     state.turn.active = false
     state.turn.combatantId = null

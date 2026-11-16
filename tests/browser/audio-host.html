@@ -1,0 +1,23 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>Owlbear audio iframe lifecycle harness</title>
+  </head>
+  <body style="margin: 0; background: #101724">
+    <iframe
+      name="background"
+      title="Extension background"
+      src="/background.html?client=host&amp;role=GM"
+      style="width: 1px; height: 1px; position: fixed; left: -20px"
+      allow="autoplay"
+    ></iframe>
+    <iframe
+      name="action"
+      title="Combat panel"
+      src="/?client=host&amp;role=GM"
+      style="width: 520px; height: 940px; border: 0"
+      allow="autoplay"
+    ></iframe>
+  </body>
+</html>

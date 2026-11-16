@@ -1,5 +1,5 @@
 import { expect, type Page, type BrowserContext } from "@playwright/test"
-import type { Item, Metadata } from "@owlbear-rodeo/sdk"
+import type { Item, Metadata, Player } from "@owlbear-rodeo/sdk"
 
 export type MockWindow = Window & {
   __obrMock: {
@@ -9,6 +9,8 @@ export type MockWindow = Window & {
     local: Item[]
     selection: string[]
     receiveMetadata(metadata: Metadata): void
+    receiveItems(items: Item[]): void
+    receiveParty(players: Player[]): void
     receiveBroadcast(
       channel: string,
       message: { data: unknown; connectionId: string },
@@ -24,6 +26,21 @@ export class SharedScene {
   errors: string[] = []
   clients = new Set<Page>()
   clientIds = new Map<Page, string>()
+  clientRoles = new Map<Page, "GM" | "PLAYER">()
+
+  private players(): Player[] {
+    return [...this.clientIds]
+      .filter(([page]) => !page.isClosed())
+      .map(([page, id]) => ({
+        id,
+        connectionId: id,
+        name: id,
+        role: this.clientRoles.get(page) ?? "PLAYER",
+        color: "#93bbdd",
+        metadata: {},
+        syncView: false,
+      }))
+  }
 
   async page(
     context: BrowserContext,
@@ -33,12 +50,27 @@ export class SharedScene {
   ) {
     const page = await context.newPage()
     this.clientIds.set(page, client)
+    this.clientRoles.set(page, role)
     page.on("pageerror", error => this.errors.push(error.message))
     await page.exposeFunction("__obrGetMetadata", () => {
       this.clients.add(page)
       return this.metadata
     })
     await page.exposeFunction("__obrGetItems", () => this.items)
+    await page.exposeFunction("__obrGetPlayers", () => this.players())
+    await page.exposeFunction("__obrUpdateItems", async (items: Item[]) => {
+      this.items = this.items.map(item => items.find(next => next.id === item.id) ?? item)
+      await Promise.all(
+        [...this.clients]
+          .filter(client => !client.isClosed())
+          .map(client =>
+            client.evaluate(
+              items => (window as MockWindow).__obrMock.receiveItems(items),
+              this.items,
+            ),
+          ),
+      )
+    })
     await page.exposeFunction("__obrSetMetadata", async (patch: Metadata) => {
       // Real scene.setMetadata merges top-level keys, so simultaneous distinct
       // journal entries survive. A whole-roster write would lose this test.
@@ -59,14 +91,27 @@ export class SharedScene {
     })
     await page.exposeFunction(
       "__obrBroadcast",
-      async (channel: string, data: unknown) => {
+      async (
+        channel: string,
+        data: unknown,
+        options?: { destination?: "LOCAL" | "REMOTE" | "ALL" },
+      ) => {
+        const destination = options?.destination ?? "REMOTE"
         await Promise.all(
           [...this.clients]
-            .filter(p => !p.isClosed() && this.clientIds.get(p) === client)
+            .filter(
+              p =>
+                !p.isClosed() &&
+                (destination === "ALL" ||
+                  (destination === "LOCAL"
+                    ? this.clientIds.get(p) === client
+                    : this.clientIds.get(p) !== client)),
+            )
             .map(p =>
               p.evaluate(
                 ({ channel, data, client }) => {
-                  (window as MockWindow).__obrMock.receiveBroadcast(channel, {
+                  const mock = (window as MockWindow).__obrMock
+                  mock.receiveBroadcast(channel, {
                     data,
                     connectionId: client,
                   })
@@ -82,6 +127,17 @@ export class SharedScene {
       await expect(
         page.getByRole("textbox", { name: "Имя участника", exact: true }),
       ).toBeVisible()
+    const players = this.players()
+    await Promise.all(
+      [...this.clients]
+        .filter(p => !p.isClosed())
+        .map(p =>
+          p.evaluate(
+            players => (window as MockWindow).__obrMock.receiveParty(players),
+            players,
+          ),
+        ),
+    )
     return page
   }
 

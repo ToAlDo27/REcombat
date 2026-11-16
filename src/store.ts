@@ -9,6 +9,12 @@ import {
 } from "./model"
 import { rollInitiative } from "./random"
 import {
+  normalizeTokenPatch,
+  readTokenProfile,
+  TOKEN_DATA_KEY,
+  tokenMetadata,
+} from "./tokenData"
+import {
   PREFIX,
   type Actor,
   type Combatant,
@@ -17,6 +23,8 @@ import {
   type RollResult,
   type Settings,
   type Snapshot,
+  type TokenInitiative,
+  type TokenProfilePatch,
 } from "./types"
 
 /** Deliberately small surface: tests can run several real stores over one scene. */
@@ -45,6 +53,7 @@ export interface CombatSDK {
     onMetadataChange(callback: (metadata: Metadata) => void): () => void
     items: {
       getItems(): Promise<Item[]>
+      updateItems?(ids: string[], update: (draft: Item[]) => void): Promise<void>
       onChange(callback: (items: Item[]) => void): () => void
     }
   }
@@ -89,6 +98,8 @@ export class CombatStore {
   private unsubscribers: (() => void)[] = []
   private uuid: () => string
   private makeRoll: (bonus: number, settings: Settings) => RollResult
+  private tokenSyncing = false
+  private tokenSyncRequested = false
 
   constructor(
     private sdk: CombatSDK = OBR,
@@ -245,12 +256,16 @@ export class CombatStore {
         this.clock = Math.max(this.clock, op.clock)
       }
       this.replay()
+      this.queueTokenSync()
     }
     this.sceneUnsubscribers.push(
       this.sdk.scene.onMetadataChange(ingest),
       this.sdk.scene.items.onChange(items => {
         itemRevision++
-        if (current()) this.publish({ items })
+        if (current()) {
+          this.publish({ items })
+          this.queueTokenSync()
+        }
       }),
     )
     const itemRead = itemRevision
@@ -262,7 +277,10 @@ export class CombatStore {
     })
     void Promise.all([metadata, items])
       .then(() => {
-        if (current()) this.publish({ ready: true, loading: false })
+        if (current()) {
+          this.publish({ ready: true, loading: false })
+          this.queueTokenSync()
+        }
       })
       .catch(error => {
         if (current())
@@ -287,6 +305,21 @@ export class CombatStore {
     } else if (command.kind === "turn") {
       if (!canControl(actor, state.settings))
         throw new Error("Переключать ход может ведущий.")
+    } else if (command.kind === "token") {
+      const item = state.items.find(item => item.id === command.tokenId)
+      if (!item || item.type !== "IMAGE" || !["CHARACTER", "MOUNT"].includes(item.layer))
+        throw new Error("Выберите токен персонажа в текущей сцене.")
+      if (actor.role !== "GM" && !item.visible) throw new Error("Токен недоступен.")
+      const combatant = state.combatants.find(c => c.tokenId === command.tokenId)
+      if (combatant && !canEdit(combatant, actor, state.settings))
+        throw new Error("Редактировать можно только своих участников.")
+      if (
+        !combatant &&
+        actor.role !== "GM" &&
+        state.settings.playerEdit === "own" &&
+        item.createdUserId !== actor.id
+      )
+        throw new Error("Редактировать можно только свои токены.")
     } else if (command.kind !== "add") {
       const combatant = state.combatants.find(c => c.id === command.id)
       if (!combatant) throw new Error("Участник уже удалён из боя.")
@@ -297,15 +330,20 @@ export class CombatStore {
     }
   }
 
-  dispatch = async (command: Command): Promise<void> => {
+  dispatch = async (command: Command, idempotencyId?: string): Promise<void> => {
     const epoch = this.sceneEpoch
     try {
       const actor = this.requireActor()
+      if (
+        idempotencyId &&
+        (this.operations.has(idempotencyId) || this.pending.has(idempotencyId))
+      )
+        return
       this.authorize(command, actor)
       const op = normalizeOperation({
         ...command,
         schema: 1,
-        idempotencyId: this.uuid(),
+        idempotencyId: idempotencyId ?? this.uuid(),
         clock: ++this.clock,
         actorId: actor.id,
       })
@@ -325,6 +363,7 @@ export class CombatStore {
         this.operations.set(op.idempotencyId, op)
         this.pending.delete(op.idempotencyId)
         this.replay()
+        this.queueTokenSync()
       } catch (error) {
         if (this.sceneEpoch === epoch) {
           this.pending.delete(op.idempotencyId)
@@ -338,7 +377,77 @@ export class CombatStore {
     }
   }
 
-  addTokens = async (items: Item[]): Promise<void> => {
+  /** The journal is authoritative. Item metadata is a portable, repairable mirror. */
+  private queueTokenSync(): void {
+    if (!this.snapshot.ready || !this.sdk.scene.items.updateItems) return
+    this.tokenSyncRequested = true
+    if (this.tokenSyncing) return
+    this.tokenSyncing = true
+    const epoch = this.sceneEpoch
+    const synchronize = async () => {
+      while (this.tokenSyncRequested && epoch === this.sceneEpoch && this.sceneReady) {
+        this.tokenSyncRequested = false
+        // Never put an optimistic/failed operation onto a token.
+        const profiles = reduceOperations(this.operations.values()).tokenProfiles
+        const ids = this.snapshot.items
+          .filter(
+            item =>
+              profiles[item.id] &&
+              JSON.stringify(item.metadata?.[TOKEN_DATA_KEY]) !==
+                JSON.stringify(tokenMetadata(profiles[item.id])),
+          )
+          .map(item => item.id)
+        if (!ids.length) continue
+        await this.sdk.scene.items.updateItems!(ids, drafts => {
+          for (const item of drafts) {
+            const profile = profiles[item.id]
+            if (profile)
+              item.metadata = {
+                ...item.metadata,
+                [TOKEN_DATA_KEY]: tokenMetadata(profile),
+              }
+          }
+        })
+      }
+    }
+    void synchronize()
+      .catch(error => {
+        if (epoch === this.sceneEpoch) {
+          this.tokenSyncRequested = false
+          this.publish({
+            error: `Данные сохранены в сцене, но карточку токена обновить не удалось: ${errorText(
+              error,
+            )}`,
+          })
+        }
+      })
+      .finally(() => {
+        this.tokenSyncing = false
+        if (this.tokenSyncRequested) this.queueTokenSync()
+      })
+  }
+
+  saveTokenProfile = async (tokenId: string, value: TokenProfilePatch): Promise<void> => {
+    const actor = this.requireActor()
+    const item = this.snapshot.items.find(item => item.id === tokenId)
+    if (!item) throw new Error("Токен уже удалён из сцены.")
+    const patch = normalizeTokenPatch(value)
+    if (!patch) throw new Error("Проверьте значения карточки и ссылку на персонажа LSS.")
+    if (!Object.keys(patch).length) return
+    await this.dispatch({
+      kind: "token",
+      tokenId,
+      patch,
+      base:
+        this.snapshot.tokenProfiles[tokenId] ??
+        readTokenProfile(item, actor.role === "GM" ? "npc" : "pc"),
+    })
+  }
+
+  addTokens = async (
+    items: Item[],
+    options: { initiative?: TokenInitiative } = {},
+  ): Promise<void> => {
     const actor = this.requireActor()
     const unique = [...new Map(items.map(item => [item.id, item])).values()]
     await Promise.all(
@@ -347,18 +456,36 @@ export class CombatStore {
           item =>
             item.type === "IMAGE" &&
             ["CHARACTER", "MOUNT"].includes(item.layer) &&
-            (actor.role === "GM" || item.visible),
+            (actor.role === "GM" || item.visible) &&
+            !this.snapshot.combatants.some(c => c.tokenId === item.id),
         )
-        .map(item =>
-          this.dispatch({
+        .map(item => {
+          const latest =
+            this.snapshot.items.find(current => current.id === item.id) ?? item
+          const profile =
+            this.snapshot.tokenProfiles[item.id] ??
+            readTokenProfile(latest, actor.role === "GM" ? "npc" : "pc")
+          const initiative = options.initiative ?? this.snapshot.settings.tokenInitiative
+          const result =
+            initiative === "roll"
+              ? this.makeRoll(profile.bonus, {
+                  ...this.snapshot.settings,
+                  rollMode: profile.rollMode ?? this.snapshot.settings.rollMode,
+                })
+              : undefined
+          return this.dispatch({
             kind: "add",
+            initiative,
             combatant: {
               ...this.newCombatant(item.name || "Без имени", actor),
+              ...profile,
               id: `token:${item.id}`,
               tokenId: item.id,
+              ...(result ? { initiative: result.total, lastRoll: result } : {}),
+              ...(initiative === "empty" ? { initiative: null } : {}),
             },
-          }),
-        ),
+          })
+        }),
     )
   }
 
@@ -387,7 +514,10 @@ export class CombatStore {
     await this.dispatch({
       kind: "roll",
       id,
-      result: this.makeRoll(combatant.bonus, this.snapshot.settings),
+      result: this.makeRoll(combatant.bonus, {
+        ...this.snapshot.settings,
+        rollMode: combatant.rollMode ?? this.snapshot.settings.rollMode,
+      }),
     })
   }
 

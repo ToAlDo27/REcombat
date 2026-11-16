@@ -2,19 +2,21 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react"
 import OBR from "@owlbear-rodeo/sdk"
 import { store } from "./store"
 import { canControl, canEdit, orderedCombatants } from "./model"
-import { AUDIO_STATUS, readAudio, requestAudio } from "./audio"
+import { AudioControls } from "./AudioControls"
+import TokenEditor from "./TokenEditor"
+import { LssGuide, LssPanel } from "./LssPanel"
+import { readTokenProfile } from "./tokenData"
+import pkg from "../package.json"
+import { ReleaseNotes } from "./ReleaseNotes"
 import type { Combatant, Settings, Snapshot } from "./types"
 import { SOURCE_URL } from "./types"
 
 const manifestUrl = new URL("manifest.json", document.baseURI).href
-const run = (task: Promise<unknown>) => {
-  void task.catch(() => undefined)
-}
 
 function Source() {
   return (
     <footer>
-      <span>ToAlDo27 · REcombat 1.0</span>
+      <span>by ToAlDo27 · REcombat {pkg.version}</span>
       <a href={SOURCE_URL} target="_blank" rel="noreferrer">
         Исходный код ↗
       </a>
@@ -32,7 +34,7 @@ function Landing() {
           <strong>REcombat</strong>
           <span>для Owlbear Rodeo</span>
         </div>
-        <span className="tag">1.0</span>
+        <span className="tag">{pkg.version}</span>
       </header>
       <div className="hero-mark" aria-hidden="true">
         ⚔
@@ -88,6 +90,7 @@ function Landing() {
           у себя.
         </small>
       </section>
+      <ReleaseNotes />
       <Source />
     </main>
   )
@@ -155,8 +158,12 @@ function CombatantCard({
   c,
   snapshot,
   perform,
+  editToken,
+  openSheet,
 }: {
   c: Combatant
+  editToken: (id: string) => void
+  openSheet: (id: string) => void
   snapshot: Snapshot
   perform: (task: Promise<unknown>) => void
 }) {
@@ -316,6 +323,23 @@ function CombatantCard({
           <option value="npc">NPC</option>
         </select>
       </div>
+      {c.tokenId && (
+        <div className="card-links">
+          <button className="quiet" onClick={() => editToken(c.tokenId!)}>
+            Данные токена
+          </button>
+          {c.lss && (
+            <>
+              <a href={c.lss.url} target="_blank" rel="noreferrer">
+                Лист LSS ↗
+              </a>
+              <button className="quiet" onClick={() => openSheet(c.tokenId!)}>
+                Встроенный лист
+              </button>
+            </>
+          )}
+        </div>
+      )}
       {!hidden && (
         <div className="hp-bar">
           <i style={{ width: `${Math.min(100, (c.hp / c.maxHp) * 100)}%` }} />
@@ -380,6 +404,21 @@ function SettingsPanel({
             </select>
           </label>
           <label>
+            При добавлении токена
+            <select
+              value={s.tokenInitiative}
+              onChange={event =>
+                patch({
+                  tokenInitiative: event.target.value as Settings["tokenInitiative"],
+                })
+              }
+            >
+              <option value="manual">Взять инициативу из карточки</option>
+              <option value="roll">Сразу бросить инициативу</option>
+              <option value="empty">Оставить инициативу пустой</option>
+            </select>
+          </label>
+          <label>
             Редактирование игроков
             <select
               value={s.playerEdit}
@@ -423,30 +462,9 @@ function Combat() {
   const [name, setName] = useState("")
   const [picker, setPicker] = useState(false)
   const [error, setError] = useState("")
-  const [audio, setAudio] = useState(readAudio)
-  const [audioActive, setAudioActive] = useState(false)
-  const [audioPending, setAudioPending] = useState(false)
-  const audioTimer = useRef<ReturnType<typeof setTimeout>>()
+  const [editingToken, setEditingToken] = useState<string>()
+  const [sheetToken, setSheetToken] = useState<string>()
   useEffect(() => store.start(), [])
-  useEffect(() => {
-    let dispose: (() => void) | undefined
-    let alive = true
-    OBR.onReady(() => {
-      if (!alive) return
-      dispose = OBR.broadcast.onMessage(AUDIO_STATUS, event => {
-        const data = event.data as { enabled?: boolean }
-        setAudioActive(data.enabled === true)
-        setAudioPending(false)
-        clearTimeout(audioTimer.current)
-      })
-      run(requestAudio(readAudio()))
-    })
-    return () => {
-      alive = false
-      dispose?.()
-      clearTimeout(audioTimer.current)
-    }
-  }, [])
   const perform = (task: Promise<unknown>) => {
     setError("")
     void task.catch(cause =>
@@ -456,20 +474,6 @@ function Combat() {
           : "Не удалось сохранить изменение. Повторите действие.",
       ),
     )
-  }
-  const changeAudio = (enabled: boolean, volume = audio.volume) => {
-    const next = { enabled, volume }
-    setAudio(next)
-    setAudioPending(true)
-    clearTimeout(audioTimer.current)
-    audioTimer.current = setTimeout(() => {
-      setAudioPending(false)
-      if (enabled)
-        setError(
-          "Звук пока не включён. Нажмите «Включить звук» ещё раз в открытой комнате.",
-        )
-    }, 4000)
-    perform(requestAudio(next))
   }
   const tokens = snapshot.items.filter(
     item =>
@@ -485,6 +489,8 @@ function Combat() {
   const roster = orderedCombatants(snapshot).filter(
     c => !c.tokenId || !invisibleIds.has(c.tokenId),
   )
+  const editingItem = tokens.find(item => item.id === editingToken)
+  const sheetItem = tokens.find(item => item.id === sheetToken)
   const current = roster.find(c => c.id === snapshot.turn.combatantId)
   const control = canControl(snapshot.actor, snapshot.settings)
   const available = snapshot.ready && !snapshot.loading
@@ -596,33 +602,15 @@ function Combat() {
               )}
             </div>
           </section>
-          <div className="audio-controls">
-            <button
-              className="quiet"
-              disabled={audioPending}
-              onClick={() => changeAudio(!audioActive)}
-            >
-              {audioPending
-                ? "Включаем…"
-                : audioActive
-                  ? "♫ Звук включён"
-                  : "♪ Включить звук"}
-            </button>
-            <input
-              aria-label="Громкость удара меча"
-              type="range"
-              min="0"
-              max="1"
-              step="0.05"
-              value={audio.volume}
-              onChange={event => {
-                const next = { ...audio, volume: Number(event.target.value) }
-                setAudio(next)
-                run(requestAudio(next))
-              }}
+          <AudioControls />
+          {sheetItem && (
+            <LssPanel
+              key={snapshot.sceneKey + sheetItem.id}
+              item={sheetItem}
+              snapshot={snapshot}
+              onClose={() => setSheetToken(undefined)}
             />
-            <small>Только у вас</small>
-          </div>
+          )}
           <section className="roster">
             <div className="section-title">
               <h2>
@@ -649,7 +637,14 @@ function Combat() {
             {roster.length ? (
               <div className="roster-list">
                 {roster.map(c => (
-                  <CombatantCard key={c.id} c={c} snapshot={snapshot} perform={perform} />
+                  <CombatantCard
+                    key={c.id}
+                    c={c}
+                    snapshot={snapshot}
+                    perform={perform}
+                    editToken={setEditingToken}
+                    openSheet={setSheetToken}
+                  />
                 ))}
               </div>
             ) : (
@@ -677,6 +672,20 @@ function Combat() {
               </button>
               <button
                 className="quiet"
+                onClick={() =>
+                  perform(
+                    OBR.player.getSelection().then(ids => {
+                      const selected = tokens.find(item => ids?.includes(item.id))
+                      if (!selected) throw new Error("Выделите токен персонажа на карте.")
+                      setEditingToken(selected.id)
+                    }),
+                  )
+                }
+              >
+                Данные токена
+              </button>
+              <button
+                className="quiet"
                 aria-expanded={picker}
                 onClick={() => setPicker(!picker)}
               >
@@ -687,18 +696,26 @@ function Combat() {
               <div className="token-picker">
                 {tokens.length ? (
                   tokens.map(item => (
-                    <button
-                      key={item.id}
-                      disabled={snapshot.combatants.some(c => c.tokenId === item.id)}
-                      onClick={() => perform(store.addTokens([item]))}
-                    >
-                      <span>{item.name || "Без имени"}</span>
-                      <span>
-                        {snapshot.combatants.some(c => c.tokenId === item.id)
-                          ? "✓"
-                          : "＋"}
-                      </span>
-                    </button>
+                    <div key={item.id} className="token-picker-row">
+                      <button
+                        disabled={snapshot.combatants.some(c => c.tokenId === item.id)}
+                        onClick={() => perform(store.addTokens([item]))}
+                      >
+                        <span>{item.name || "Без имени"}</span>
+                        <span>
+                          {snapshot.combatants.some(c => c.tokenId === item.id)
+                            ? "✓"
+                            : "＋"}
+                        </span>
+                      </button>
+                      <button
+                        className="quiet"
+                        aria-label={"Настроить токен " + item.name}
+                        onClick={() => setEditingToken(item.id)}
+                      >
+                        Настроить
+                      </button>
+                    </div>
                   ))
                 ) : (
                   <p>В сцене нет токенов персонажей.</p>
@@ -727,6 +744,37 @@ function Combat() {
               </button>
             </form>
           </section>
+          {editingItem && (
+            <TokenEditor
+              key={snapshot.sceneKey + editingItem.id}
+              item={editingItem}
+              profile={
+                snapshot.tokenProfiles[editingItem.id] ??
+                readTokenProfile(
+                  editingItem,
+                  snapshot.actor?.role === "GM" ? "npc" : "pc",
+                )
+              }
+              combatant={snapshot.combatants.find(c => c.tokenId === editingItem.id)}
+              settings={snapshot.settings}
+              defaultFaction={snapshot.actor?.role === "GM" ? "npc" : "pc"}
+              disabled={
+                snapshot.combatants.some(
+                  c =>
+                    c.tokenId === editingItem.id &&
+                    !canEdit(c, snapshot.actor, snapshot.settings),
+                ) ||
+                (snapshot.settings.playerEdit === "own" &&
+                  snapshot.actor?.role !== "GM" &&
+                  !snapshot.combatants.some(c => c.tokenId === editingItem.id) &&
+                  editingItem.createdUserId !== snapshot.actor?.id)
+              }
+              onSave={patch => store.saveTokenProfile(editingItem.id, patch)}
+              onAdd={initiative => store.addTokens([editingItem], { initiative })}
+              onClose={() => setEditingToken(undefined)}
+            />
+          )}
+          <LssGuide />
           <SettingsPanel snapshot={snapshot} perform={perform} />
           <p className="save-note">
             Общий список сохраняется в сцене. Все игроки могут добавлять участников
@@ -734,6 +782,7 @@ function Combat() {
           </p>
         </>
       )}
+      <ReleaseNotes />
       <Source />
     </main>
   )

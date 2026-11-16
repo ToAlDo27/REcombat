@@ -27,6 +27,7 @@ jobs:
         id: pages
         uses: actions/configure-pages@v5
       - run: npm ci
+      - run: npm run check:release
       - run: npm test
       - run: npm run lint
       - name: Build extension

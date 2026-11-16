@@ -1,6 +1,6 @@
 {
   "name": "recombat",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "author": {
@@ -14,9 +14,11 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:browser": "playwright test",
-    "lint": "eslint src tests --ext ts,tsx --max-warnings 0"
+    "lint": "eslint src tests --ext ts,tsx --max-warnings 0",
+    "check:release": "node scripts/check-release.mjs"
   },
   "dependencies": {
+    "@longstoryshort/vtt-sdk": "0.9.0",
     "@owlbear-rodeo/sdk": "3.1.0",
     "react": "18.2.0",
     "react-dom": "18.2.0"
