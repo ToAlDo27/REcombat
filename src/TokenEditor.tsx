@@ -1,4 +1,4 @@
-import { useRef, useState, type FormEvent } from "react"
+import { useEffect, useRef, useState, type FormEvent } from "react"
 import type { Item } from "@owlbear-rodeo/sdk"
 import { normalizeLssLink } from "./lss"
 import { readTokenProfile, tokenProfileFromCombatant } from "./tokenData"
@@ -17,6 +17,7 @@ export interface TokenEditorProps {
   settings: Settings
   defaultFaction?: "pc" | "npc"
   disabled?: boolean
+  inline?: boolean
   onSave: (patch: TokenProfilePatch) => Promise<void>
   onAdd: (initiative?: TokenInitiative) => Promise<void>
   onClose: () => void
@@ -29,6 +30,7 @@ export default function TokenEditor({
   settings,
   defaultFaction,
   disabled,
+  inline = false,
   onSave,
   onAdd,
   onClose,
@@ -36,19 +38,18 @@ export default function TokenEditor({
   const initial = combatant
     ? tokenProfileFromCombatant(combatant)
     : profile ?? readTokenProfile(item, defaultFaction)
-  const [draft, setDraft] = useState(() => ({
-    name: initial.name,
-    hp: String(initial.hp),
-    maxHp: String(initial.maxHp),
-    ac: String(initial.ac),
-    bonus: String(initial.bonus),
-    initiative: initial.initiative === null ? "" : String(initial.initiative),
-    faction: initial.faction,
-    rollMode: (initial.rollMode ?? "") as NonNullable<TokenProfile["rollMode"]> | "",
-    lssUrl: initial.lss?.url ?? "",
-    lssSync: initial.lss?.sync ?? true,
-  }))
+  const [draft, setDraft] = useState(() => draftFromProfile(initial))
   const dirty = useRef(new Set<keyof typeof draft>())
+  const incoming = JSON.stringify(initial)
+  useEffect(() => {
+    const latest = draftFromProfile(JSON.parse(incoming) as TokenProfile)
+    setDraft(current => {
+      const next = { ...current }
+      for (const key of Object.keys(latest) as (keyof typeof latest)[])
+        if (!dirty.current.has(key)) Object.assign(next, { [key]: latest[key] })
+      return JSON.stringify(next) === JSON.stringify(current) ? current : next
+    })
+  }, [incoming])
   const [initiativeMode, setInitiativeMode] = useState<TokenInitiative>(
     settings.tokenInitiative,
   )
@@ -97,24 +98,28 @@ export default function TokenEditor({
   }
   return (
     <form
-      className="token-editor"
+      className={`token-editor${inline ? " inline" : ""}`}
       aria-label={`Карточка токена ${item.name || "Без имени"}`}
       onSubmit={submit}
     >
       <div className="section-title">
         <h3>Карточка токена</h3>
-        <button
-          type="button"
-          className="quiet"
-          onClick={onClose}
-          disabled={saving}
-          aria-label="Закрыть карточку токена"
-        >
-          ×
-        </button>
+        {!inline && (
+          <button
+            type="button"
+            className="quiet"
+            onClick={onClose}
+            disabled={saving}
+            aria-label="Закрыть карточку токена"
+          >
+            ×
+          </button>
+        )}
       </div>
       <p className="token-editor-note">
-        Сохраните параметры на токене перед добавлением в бой.
+        {combatant
+          ? "Показатели связаны с токеном и общим списком боя."
+          : "Сохраните параметры на токене перед добавлением в бой."}
       </p>
       {error && (
         <p className="error" role="alert">
@@ -234,4 +239,19 @@ export default function TokenEditor({
       </fieldset>
     </form>
   )
+}
+
+function draftFromProfile(profile: TokenProfile) {
+  return {
+    name: profile.name,
+    hp: String(profile.hp),
+    maxHp: String(profile.maxHp),
+    ac: String(profile.ac),
+    bonus: String(profile.bonus),
+    initiative: profile.initiative === null ? "" : String(profile.initiative),
+    faction: profile.faction,
+    rollMode: (profile.rollMode ?? "") as NonNullable<TokenProfile["rollMode"]> | "",
+    lssUrl: profile.lss?.url ?? "",
+    lssSync: profile.lss?.sync ?? true,
+  }
 }

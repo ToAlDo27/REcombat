@@ -1,4 +1,11 @@
-import type { Item, Metadata, Player, Popover } from "@owlbear-rodeo/sdk"
+import type {
+  ContextMenuItem,
+  Item,
+  Metadata,
+  Modal,
+  Player,
+  Popover,
+} from "@owlbear-rodeo/sdk"
 // Keep real SDK builders and item geometry. Only its network transport is replaced.
 export * from "../../node_modules/@owlbear-rodeo/sdk/lib/index.js"
 
@@ -6,6 +13,8 @@ type Handler<T> = (value: T) => void
 type Transport = Window & {
   __obrGetMetadata?: () => Promise<Metadata>
   __obrSetMetadata?: (patch: Metadata) => Promise<void>
+  __obrGetRoomMetadata?: () => Promise<Metadata>
+  __obrSetRoomMetadata?: (patch: Metadata) => Promise<void>
   __obrGetItems?: () => Promise<Item[]>
   __obrGetPlayers?: () => Promise<Player[]>
   __obrUpdateItems?: (items: Item[]) => Promise<void>
@@ -15,6 +24,8 @@ type Transport = Window & {
     options?: { destination?: "LOCAL" | "REMOTE" | "ALL" },
   ) => Promise<void>
   __obrOpenPopover?: (popover: Popover) => Promise<void>
+  __obrOpenModal?: (modal: Modal) => Promise<void>
+  __obrCloseModal?: (id: string) => Promise<void>
   __obrClosePopover?: (id: string) => Promise<void>
   __obrResizePopover?: (
     id: string,
@@ -27,6 +38,7 @@ const query = new URLSearchParams(location.search)
 const role = query.get("role") === "PLAYER" ? "PLAYER" : "GM"
 const client = query.get("client") ?? "host"
 const metadataListeners = new Set<Handler<Metadata>>()
+const roomMetadataListeners = new Set<Handler<Metadata>>()
 const itemsListeners = new Set<Handler<Item[]>>()
 const readyListeners = new Set<Handler<boolean>>()
 const partyListeners = new Set<Handler<Player[]>>()
@@ -47,34 +59,94 @@ const player: Player = {
   metadata: {},
   selection: [],
 }
+type MockRelay = {
+  receiveMetadata(metadata: Metadata): void
+  receiveRoomMetadata(metadata: Metadata): void
+  receiveItems(items: Item[]): void
+  receiveParty(players: Player[]): void
+  receiveBroadcast(
+    channel: string,
+    message: { data: unknown; connectionId: string },
+  ): void
+}
+// Modal tests mount real extension documents in child frames. Each document has
+// its own SDK/store, just as Owlbear does, and receives the host's scene relay.
+const childMocks = (): MockRelay[] => {
+  const children: MockRelay[] = []
+  for (let index = 0; index < window.frames.length; index++) {
+    try {
+      const mock = (window.frames[index] as Window & { __obrMock?: MockRelay })
+        .__obrMock
+      if (mock) children.push(mock)
+    } catch {
+      // A cross-origin LSS sheet is not an Owlbear extension client.
+    }
+  }
+  return children
+}
 const state = {
   metadata: {} as Metadata,
+  roomMetadata: {} as Metadata,
   items: [] as Item[],
   local: [] as Item[],
   selection: [] as string[],
   ready: true,
   writes: [] as Metadata[],
+  roomWrites: [] as Metadata[],
   localWrites: [] as { kind: string; ids: string[] }[],
   notifications: [] as string[],
+  contextMenus: [] as ContextMenuItem[],
+  modalOpens: [] as Modal[],
+  modalCloses: [] as string[],
   players: [] as Player[],
+  clickContextMenu: async (id: string, itemIds: string[]) => {
+    const menu = state.contextMenus.find(menu => menu.id === id)
+    if (!menu?.onClick) throw new Error(`Unknown context menu: ${id}`)
+    const items = transport.__obrGetItems
+      ? await transport.__obrGetItems()
+      : state.items
+    await menu.onClick(
+      {
+        items: clone(items.filter(item => itemIds.includes(item.id))),
+        selectionBounds: {
+          min: { x: 0, y: 0 },
+          max: { x: 150, y: 150 },
+          center: { x: 75, y: 75 },
+          width: 150,
+          height: 150,
+        },
+      },
+      id,
+    )
+  },
   receiveParty: (players: Player[]) => {
     state.players = clone(players)
     partyListeners.forEach(fn => fn(clone(players)))
+    childMocks().forEach(child => child.receiveParty(players))
   },
   receiveMetadata: (metadata: Metadata) => {
     state.metadata = clone(metadata)
     metadataListeners.forEach(fn => fn(clone(state.metadata)))
+    childMocks().forEach(child => child.receiveMetadata(metadata))
+  },
+  receiveRoomMetadata: (metadata: Metadata) => {
+    state.roomMetadata = clone(metadata)
+    roomMetadataListeners.forEach(fn => fn(clone(state.roomMetadata)))
+    childMocks().forEach(child => child.receiveRoomMetadata(metadata))
   },
   receiveItems: (items: Item[]) => {
     state.items = clone(items)
     itemsListeners.forEach(fn => fn(clone(state.items)))
+    childMocks().forEach(child => child.receiveItems(items))
   },
   setReady: (ready: boolean) => {
     state.ready = ready
     readyListeners.forEach(fn => fn(ready))
   },
-  receiveBroadcast: (channel: string, message: { data: unknown; connectionId: string }) =>
-    broadcasts.get(channel)?.forEach(fn => fn(message)),
+  receiveBroadcast: (channel: string, message: { data: unknown; connectionId: string }) => {
+    broadcasts.get(channel)?.forEach(fn => fn(message))
+    childMocks().forEach(child => child.receiveBroadcast(channel, message))
+  },
 }
 Object.assign(window, { __obrMock: state })
 
@@ -132,7 +204,24 @@ const OBR = {
   isAvailable: query.get("embedded") !== "0",
   isReady: true,
   onReady: (callback: () => void) => queueMicrotask(callback),
-  room: { id: "mock-room", getId: async () => "mock-room" },
+  room: {
+    id: "mock-room",
+    getId: async () => "mock-room",
+    getMetadata: async () => {
+      if (transport.__obrGetRoomMetadata)
+        state.roomMetadata = await transport.__obrGetRoomMetadata()
+      return clone(state.roomMetadata)
+    },
+    setMetadata: async (patch: Metadata) => {
+      state.roomWrites.push(clone(patch))
+      if (transport.__obrSetRoomMetadata) await transport.__obrSetRoomMetadata(patch)
+      else state.receiveRoomMetadata({ ...state.roomMetadata, ...patch })
+    },
+    onMetadataChange: (fn: Handler<Metadata>) => {
+      roomMetadataListeners.add(fn)
+      return () => roomMetadataListeners.delete(fn)
+    },
+  },
   player: {
     id: client,
     getId: async () => client,
@@ -177,7 +266,25 @@ const OBR = {
     local: localApi,
     grid: { getDpi: async () => 150 },
   },
-  contextMenu: { create: noop, remove: noop },
+  contextMenu: {
+    create: async (menu: ContextMenuItem) => {
+      state.contextMenus = state.contextMenus.filter(entry => entry.id !== menu.id)
+      state.contextMenus.push(menu)
+    },
+    remove: async (id: string) => {
+      state.contextMenus = state.contextMenus.filter(menu => menu.id !== id)
+    },
+  },
+  modal: {
+    open: async (modal: Modal) => {
+      state.modalOpens.push(clone(modal))
+      await transport.__obrOpenModal?.(modal)
+    },
+    close: async (id: string) => {
+      state.modalCloses.push(id)
+      await transport.__obrCloseModal?.(id)
+    },
+  },
   popover: {
     open: async (popover: Popover) => transport.__obrOpenPopover?.(popover),
     close: async (id: string) => transport.__obrClosePopover?.(id),

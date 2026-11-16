@@ -31,7 +31,12 @@ export default defineConfig(({ mode }) => {
     ],
     build: {
       rollupOptions: {
-        input: { main: "index.html", background: "background.html", audio: "audio.html" },
+        input: {
+          main: "index.html",
+          background: "background.html",
+          audio: "audio.html",
+          token: "token.html",
+        },
       },
     },
   }

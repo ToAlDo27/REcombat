@@ -10,6 +10,7 @@ try {
   /* Local preview before the first commit. */
 }
 copyFileSync("LICENSE", "dist/LICENSE.txt")
+copyFileSync("third_party/lss-vtt-sdk.LICENSE", "dist/VORTEX_BRIDGE_LICENSE.txt")
 const dependencies = [
   "@longstoryshort/vtt-sdk",
   "@owlbear-rodeo/sdk",
@@ -42,5 +43,5 @@ writeFileSync(
 )
 writeFileSync(
   "dist/SOURCE.txt",
-  `REcombat by ToAlDo27\nSource code: https://github.com/ToAlDo27/REcombat\nRevision: ${revision}\nLicense: MIT (LICENSE.txt)\nIndependent implementation; inspired by CLASH for Owlbear Rodeo.\n`,
+  `REcombat by ToAlDo27\nSource code: https://github.com/ToAlDo27/REcombat\nRevision: ${revision}\nLicense: MIT (LICENSE.txt)\nIndependent combat tracker; inspired by CLASH for Owlbear Rodeo.\nVortex room view adapted from https://github.com/tldrpg/lss-vtt-sdk (MIT, copyright 2026 tldrpg).\n`,
 )

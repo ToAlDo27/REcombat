@@ -3,11 +3,16 @@ import { store } from "./store"
 import { createOverlayRenderer } from "./overlays"
 import { startLssIntegration } from "./lssIntegration"
 import { AUDIO_TURN } from "./audio"
+import { startTokenContextMenus } from "./contextMenu"
 
 if (OBR.isAvailable) {
   let stopLss: (() => void) | undefined
+  let stopMenus: (() => void) | undefined
+  let stopped = false
   OBR.onReady(() => {
+    if (stopped) return
     stopLss = startLssIntegration(store)
+    stopMenus = startTokenContextMenus(store)
   })
   const overlays = createOverlayRenderer()
   let previousScene = ""
@@ -50,6 +55,8 @@ if (OBR.isAvailable) {
   window.addEventListener(
     "pagehide",
     () => {
+      stopped = true
+      stopMenus?.()
       stopLss?.()
       unsubscribe()
       stop()

@@ -539,6 +539,100 @@ a:hover {
   line-height: 1.7;
   padding-left: 20px;
 }
+.token-window {
+  padding: 14px;
+  max-width: 900px;
+  margin: auto;
+}
+.token-window .brand {
+  padding-bottom: 12px;
+}
+.token-window .brand > button {
+  margin-left: auto;
+  font-size: 22px;
+}
+.token-window .brand div {
+  min-width: 0;
+}
+.token-window .brand div > span {
+  overflow-wrap: anywhere;
+}
+.token-tabs {
+  display: flex;
+  gap: 6px;
+  margin: 15px 0;
+}
+.token-tabs button {
+  flex: 1;
+  font-size: 11px;
+}
+.token-tabs button[aria-pressed="true"] {
+  border-color: var(--gold);
+  color: var(--gold);
+  background: #332b1d;
+}
+.token-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel);
+}
+.token-summary span {
+  font-size: 11px;
+  color: var(--muted);
+}
+.token-summary b {
+  color: #eef1f7;
+  font-size: 15px;
+  margin-left: 5px;
+}
+.token-battle-actions {
+  display: flex;
+  gap: 6px;
+  margin: 10px 0;
+  flex-wrap: wrap;
+}
+.token-battle-actions button {
+  font-size: 11px;
+}
+.token-editor.inline {
+  position: static;
+  inset: auto;
+  width: 100%;
+  max-height: none;
+  height: auto;
+  overflow: visible;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.token-sheet-links {
+  font-size: 11px;
+  line-height: 1.7;
+}
+.token-sheet-links .quiet {
+  font-size: 10px;
+}
+.vortex-panel iframe {
+  width: 100%;
+  height: 570px;
+  border: 0;
+  border-radius: 8px;
+  background: #131722;
+}
+.vortex-panel p {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.7;
+}
+.vortex-panel a {
+  font-size: 11px;
+}
 .settings {
   border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);

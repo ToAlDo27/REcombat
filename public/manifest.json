@@ -1,7 +1,7 @@
 {
   "name": "REcombat",
-  "description": "Shared initiative, persistent token cards, LSS character links and reliable sword audio for Owlbear Rodeo.",
-  "version": "1.1.0",
+  "description": "Token context menu, shared initiative, HP/AC cards, LSS sheets, Vortex rooms and sword audio for Owlbear Rodeo.",
+  "version": "1.2.0",
   "manifest_version": 1,
   "icon": "/icon.svg",
   "author": "ToAlDo27",

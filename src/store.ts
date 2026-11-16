@@ -10,6 +10,7 @@ import {
 import { rollInitiative } from "./random"
 import {
   normalizeTokenPatch,
+  normalizeTokenProfile,
   readTokenProfile,
   TOKEN_DATA_KEY,
   tokenMetadata,
@@ -298,6 +299,19 @@ export class CombatStore {
     return this.snapshot.actor
   }
 
+  private authorizeTokenRegistration(tokenId: string, actor: Actor): void {
+    const state = this.snapshot
+    const item = state.items.find(item => item.id === tokenId)
+    if (item && (item.type !== "IMAGE" || !["CHARACTER", "MOUNT"].includes(item.layer)))
+      throw new Error("Выберите токен персонажа в текущей сцене.")
+    if (actor.role !== "GM" && item && !item.visible) throw new Error("Токен недоступен.")
+    if (actor.role !== "GM" && state.settings.playerEdit === "own") {
+      if (!item) throw new Error("Выберите токен персонажа в текущей сцене.")
+      if (item.createdUserId !== actor.id)
+        throw new Error("Добавлять можно только свои токены.")
+    }
+  }
+
   private authorize(command: Command, actor: Actor): void {
     const state = this.snapshot
     if (command.kind === "settings" || command.kind === "resetInitiative") {
@@ -325,8 +339,11 @@ export class CombatStore {
       if (!combatant) throw new Error("Участник уже удалён из боя.")
       if (!canEdit(combatant, actor, state.settings))
         throw new Error("Редактировать можно только своих участников.")
-    } else if (actor.role !== "GM" && command.combatant.ownerId !== actor.id) {
-      throw new Error("Нового участника нужно зарегистрировать на себя.")
+    } else {
+      if (actor.role !== "GM" && command.combatant.ownerId !== actor.id)
+        throw new Error("Нового участника нужно зарегистрировать на себя.")
+      if (command.combatant.tokenId)
+        this.authorizeTokenRegistration(command.combatant.tokenId, actor)
     }
   }
 
@@ -433,7 +450,16 @@ export class CombatStore {
     if (!item) throw new Error("Токен уже удалён из сцены.")
     const patch = normalizeTokenPatch(value)
     if (!patch) throw new Error("Проверьте значения карточки и ссылку на персонажа LSS.")
-    if (!Object.keys(patch).length) return
+    const stored = item.metadata?.[TOKEN_DATA_KEY]
+    const savedProfile =
+      stored && typeof stored === "object" && "schema" in stored && stored.schema === 1
+        ? normalizeTokenProfile(stored)
+        : null
+    if (
+      !Object.keys(patch).length &&
+      (this.snapshot.tokenProfiles[tokenId] || savedProfile)
+    )
+      return
     await this.dispatch({
       kind: "token",
       tokenId,
@@ -450,42 +476,49 @@ export class CombatStore {
   ): Promise<void> => {
     const actor = this.requireActor()
     const unique = [...new Map(items.map(item => [item.id, item])).values()]
+    const candidates = unique
+      .filter(item => !this.snapshot.combatants.some(c => c.tokenId === item.id))
+      .map(item => {
+        const latest = this.snapshot.items.find(current => current.id === item.id)
+        if (!latest && actor.role !== "GM" && this.snapshot.settings.playerEdit === "own")
+          throw new Error("Выберите токен персонажа в текущей сцене.")
+        return latest ?? item
+      })
+      .filter(
+        item =>
+          item.type === "IMAGE" &&
+          ["CHARACTER", "MOUNT"].includes(item.layer) &&
+          (actor.role === "GM" || item.visible),
+      )
+    // Validate the whole selection before dispatching any optimistic add, so a
+    // denied token cannot leave an authorized part of the batch registered.
+    for (const item of candidates) this.authorizeTokenRegistration(item.id, actor)
     await Promise.all(
-      unique
-        .filter(
-          item =>
-            item.type === "IMAGE" &&
-            ["CHARACTER", "MOUNT"].includes(item.layer) &&
-            (actor.role === "GM" || item.visible) &&
-            !this.snapshot.combatants.some(c => c.tokenId === item.id),
-        )
-        .map(item => {
-          const latest =
-            this.snapshot.items.find(current => current.id === item.id) ?? item
-          const profile =
-            this.snapshot.tokenProfiles[item.id] ??
-            readTokenProfile(latest, actor.role === "GM" ? "npc" : "pc")
-          const initiative = options.initiative ?? this.snapshot.settings.tokenInitiative
-          const result =
-            initiative === "roll"
-              ? this.makeRoll(profile.bonus, {
-                  ...this.snapshot.settings,
-                  rollMode: profile.rollMode ?? this.snapshot.settings.rollMode,
-                })
-              : undefined
-          return this.dispatch({
-            kind: "add",
-            initiative,
-            combatant: {
-              ...this.newCombatant(item.name || "Без имени", actor),
-              ...profile,
-              id: `token:${item.id}`,
-              tokenId: item.id,
-              ...(result ? { initiative: result.total, lastRoll: result } : {}),
-              ...(initiative === "empty" ? { initiative: null } : {}),
-            },
-          })
-        }),
+      candidates.map(item => {
+        const profile =
+          this.snapshot.tokenProfiles[item.id] ??
+          readTokenProfile(item, actor.role === "GM" ? "npc" : "pc")
+        const initiative = options.initiative ?? this.snapshot.settings.tokenInitiative
+        const result =
+          initiative === "roll"
+            ? this.makeRoll(profile.bonus, {
+                ...this.snapshot.settings,
+                rollMode: profile.rollMode ?? this.snapshot.settings.rollMode,
+              })
+            : undefined
+        return this.dispatch({
+          kind: "add",
+          initiative,
+          combatant: {
+            ...this.newCombatant(item.name || "Без имени", actor),
+            ...profile,
+            id: `token:${item.id}`,
+            tokenId: item.id,
+            ...(result ? { initiative: result.total, lastRoll: result } : {}),
+            ...(initiative === "empty" ? { initiative: null } : {}),
+          },
+        })
+      }),
     )
   }
 

@@ -192,6 +192,101 @@ const journal = (...ops: Operation[]): Metadata =>
 afterEach(() => disposers.splice(0).forEach(dispose => dispose()))
 
 describe("concurrent scene-backed CombatStore", () => {
+  it("persists an unchanged first token card, mirrors its defaults and reloads without duplicate saves", async () => {
+    const hub = new SceneHub()
+    const gm = await makeStore(hub.client("gm", "GM"))
+    expect(gm.getSnapshot().tokenProfiles.a).toBeUndefined()
+    await gm.saveTokenProfile("a", {})
+    expect(gm.getSnapshot().combatants).toEqual([])
+    expect(gm.getSnapshot().tokenProfiles.a).toEqual({
+      name: "a",
+      hp: 10,
+      maxHp: 10,
+      ac: 10,
+      bonus: 0,
+      initiative: null,
+      faction: "npc",
+    })
+    await vi.waitFor(() =>
+      expect(hub.items[0].metadata[TOKEN_DATA_KEY]).toEqual({
+        schema: 1,
+        ...gm.getSnapshot().tokenProfiles.a,
+      }),
+    )
+    expect(hub.writes).toHaveLength(1)
+    expect(Object.values(hub.writes[0])[0]).toMatchObject({ kind: "token", patch: {} })
+    const reloaded = await makeStore(hub.client("reload", "GM"))
+    expect(reloaded.getSnapshot().tokenProfiles.a).toEqual(
+      gm.getSnapshot().tokenProfiles.a,
+    )
+    await reloaded.saveTokenProfile("a", {})
+    expect(hub.writes).toHaveLength(1)
+
+    // A portable card already carried on a token also needs no empty journal edit.
+    hub.metadata = {}
+    const portable = await makeStore(hub.client("portable", "GM"))
+    expect(portable.getSnapshot().tokenProfiles.a).toBeUndefined()
+    await portable.saveTokenProfile("a", {})
+    expect(hub.writes).toHaveLength(1)
+  })
+
+  it("rejects an entire own-mode token batch using current ownership and blocks direct registration bypasses", async () => {
+    const hub = new SceneHub()
+    hub.items[0].createdUserId = "player"
+    hub.items[1].createdUserId = "gm"
+    const gm = await makeStore(hub.client("gm", "GM"))
+    const player = await makeStore(hub.client("player"))
+    await gm.dispatch({ kind: "settings", patch: { playerEdit: "own" } })
+    const before = hub.writes.length
+    const forgedForeign = { ...hub.items[1], createdUserId: "player" }
+    await expect(player.addTokens([hub.items[0], forgedForeign])).rejects.toThrow(
+      "только свои токены",
+    )
+    expect(hub.writes).toHaveLength(before)
+    expect(player.getSnapshot().combatants).toEqual([])
+    expect(gm.getSnapshot().combatants).toEqual([])
+    await expect(
+      player.addTokens([{ ...token("missing"), createdUserId: "player" }]),
+    ).rejects.toThrow("текущей сцене")
+    const register: Command = {
+      kind: "add",
+      combatant: {
+        id: "token:b",
+        tokenId: "b",
+        name: "Claimed foreign token",
+        ownerId: "player",
+        initiative: 15,
+        bonus: 1,
+        hp: 10,
+        maxHp: 10,
+        ac: 12,
+        faction: "pc",
+      },
+    }
+    await expect(player.dispatch(register)).rejects.toThrow("только свои токены")
+    await expect(
+      player.dispatch({
+        ...register,
+        combatant: { ...register.combatant, id: "token:missing", tokenId: "missing" },
+      }),
+    ).rejects.toThrow("текущей сцене")
+    expect(hub.writes).toHaveLength(before)
+    expect(player.getSnapshot().combatants).toEqual([])
+
+    await player.addTokens([hub.items[0]])
+    expect(player.getSnapshot().combatants[0]).toMatchObject({
+      tokenId: "a",
+      ownerId: "player",
+    })
+    await gm.addTokens([hub.items[1]])
+    const gmToken = structuredClone(
+      gm.getSnapshot().combatants.find(c => c.tokenId === "b"),
+    )
+    await player.addTokens([forgedForeign], { initiative: "roll" })
+    expect(player.getSnapshot().combatants.find(c => c.tokenId === "b")).toEqual(gmToken)
+    expect(gmToken?.ownerId).toBe("gm")
+  })
+
   it("saves token cards before battle, inherits their initiative and keeps combat edits on the token", async () => {
     const hub = new SceneHub()
     const gm = await makeStore(hub.client("gm", "GM"))
@@ -443,6 +538,7 @@ describe("concurrent scene-backed CombatStore", () => {
 
   it("enforces role/edit settings and ignores hidden tokens for players", async () => {
     const hub = new SceneHub()
+    hub.items.push(token("hidden", false))
     const gm = await makeStore(hub.client("gm", "GM"))
     const player = await makeStore(hub.client("player"))
     await gm.addTokens([token("a")])
