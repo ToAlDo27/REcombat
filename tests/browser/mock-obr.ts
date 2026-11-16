@@ -37,6 +37,7 @@ const transport = window as Transport
 const query = new URLSearchParams(location.search)
 const role = query.get("role") === "PLAYER" ? "PLAYER" : "GM"
 const client = query.get("client") ?? "host"
+const roomId = query.get("room") ?? "mock-room"
 const metadataListeners = new Set<Handler<Metadata>>()
 const roomMetadataListeners = new Set<Handler<Metadata>>()
 const itemsListeners = new Set<Handler<Item[]>>()
@@ -205,8 +206,8 @@ const OBR = {
   isReady: true,
   onReady: (callback: () => void) => queueMicrotask(callback),
   room: {
-    id: "mock-room",
-    getId: async () => "mock-room",
+    id: roomId,
+    getId: async () => roomId,
     getMetadata: async () => {
       if (transport.__obrGetRoomMetadata)
         state.roomMetadata = await transport.__obrGetRoomMetadata()

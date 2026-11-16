@@ -9,6 +9,9 @@ export default defineConfig(({ mode }) => {
   const base = path ? `/${path}/` : "/"
   return {
     base,
+    optimizeDeps: {
+      entries: ["index.html", "background.html", "audio.html", "token.html"],
+    },
     plugins: [
       react(),
       {

@@ -4,5 +4,7 @@ work/
 test-results*/
 playwright-report/
 *.tsbuildinfo
+browser-bridge/build/
+browser-bridge/*.zip
 .env*
 !.env.example

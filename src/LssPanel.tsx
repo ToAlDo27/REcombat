@@ -57,6 +57,24 @@ export function LssGuide() {
         REcombat должен быть включён также у ведущего. ХП и КЗ официальный мост не
         передаёт: заполните их на токене.
       </p>
+      <p>
+        Для обычной вкладки LSS доступен экспериментальный REcombat · LSS Bridge для
+        Chrome/Edge. Установите браузерный мост, обновите обе вкладки и выберите комнату
+        через его значок. Этот способ передаёт только инициативу и не требует второго
+        участника.
+      </p>
+      <div className="lss-links">
+        <a href="https://toaldo27.github.io/REcombat/recombat-lss-bridge-0.1.0.zip">
+          Скачать браузерный мост 0.1.0
+        </a>
+        <a
+          href="https://github.com/ToAlDo27/REcombat/blob/main/browser-bridge/README.md"
+          target="_blank"
+          rel="noreferrer"
+        >
+          Установка браузерного моста ↗
+        </a>
+      </div>
       {last && (
         <p className="lss-last">
           Последний персонаж: <b>{last.name}</b>

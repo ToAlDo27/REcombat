@@ -30,6 +30,12 @@ jobs:
       - run: npm run check:release
       - run: npm test
       - run: npm run lint
+      - name: Build browser bridge
+        run: npm run build:bridge
+      - name: Install browser for bridge checks
+        run: npx playwright install --with-deps chromium
+      - name: Test browser bridge
+        run: npm run test:bridge
       - name: Build extension
         run: npm run package
         env:

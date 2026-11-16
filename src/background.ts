@@ -4,14 +4,17 @@ import { createOverlayRenderer } from "./overlays"
 import { startLssIntegration } from "./lssIntegration"
 import { AUDIO_TURN } from "./audio"
 import { startTokenContextMenus } from "./contextMenu"
+import { startBrowserBridge } from "./browserBridge"
 
 if (OBR.isAvailable) {
   let stopLss: (() => void) | undefined
   let stopMenus: (() => void) | undefined
+  let stopBrowserBridge: (() => void) | undefined
   let stopped = false
   OBR.onReady(() => {
     if (stopped) return
     stopLss = startLssIntegration(store)
+    stopBrowserBridge = startBrowserBridge(store)
     stopMenus = startTokenContextMenus(store)
   })
   const overlays = createOverlayRenderer()
@@ -58,6 +61,7 @@ if (OBR.isAvailable) {
       stopped = true
       stopMenus?.()
       stopLss?.()
+      stopBrowserBridge?.()
       unsubscribe()
       stop()
       void overlays.destroy()

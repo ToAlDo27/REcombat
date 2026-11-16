@@ -39,9 +39,25 @@ export async function applyLssRoll(
   if (!roll) return 0
   const initiative = initiativeFromRoll(roll)
   if (initiative === null) return 0
+  return applyLinkedInitiative(
+    store,
+    roll.characterId,
+    initiative,
+    rollIdentity(roll),
+    elect,
+  )
+}
+
+/** A selected local browser receiver can write directly, without peer election. */
+export async function applyLinkedInitiative(
+  store: CombatStore,
+  characterId: string,
+  initiative: number,
+  identity: string,
+  elect = false,
+): Promise<number> {
   const state = store.getSnapshot()
   if (!state.ready || state.loading || !state.actor) return 0
-  const identity = rollIdentity(roll)
   let applied = 0
   for (const initial of state.combatants) {
     const current = store.getSnapshot()
@@ -56,7 +72,7 @@ export async function applyLssRoll(
     if (
       !c ||
       !c.lss?.sync ||
-      c.lss.characterId !== roll.characterId ||
+      c.lss.characterId !== characterId ||
       !canEdit(c, current.actor, current.settings) ||
       (elect && !isWriter(current, actor => canEdit(c, actor, current.settings)))
     )
@@ -82,7 +98,7 @@ export async function applyLssRoll(
     if (item.type !== "IMAGE" || !["CHARACTER", "MOUNT"].includes(item.layer)) continue
     if (current.combatants.some(c => c.tokenId === item.id)) continue
     const profile = current.tokenProfiles[item.id] ?? readTokenProfile(item)
-    if (!profile.lss?.sync || profile.lss.characterId !== roll.characterId) continue
+    if (!profile.lss?.sync || profile.lss.characterId !== characterId) continue
     const eligible = (actor: Actor) =>
       actor.role === "GM" ||
       (item.visible &&

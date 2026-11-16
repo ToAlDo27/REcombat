@@ -1,0 +1,34 @@
+{
+  "manifest_version": 3,
+  "name": "REcombat · LSS Bridge",
+  "description": "Передаёт инициативу из обычной вкладки Long Story Short в выбранную комнату REcombat.",
+  "version": "0.1.0",
+  "minimum_chrome_version": "114",
+  "permissions": ["storage"],
+  "host_permissions": [
+    "https://longstoryshort.app/*",
+    "https://www.owlbear.rodeo/*",
+    "https://toaldo27.github.io/REcombat/*"
+  ],
+  "background": { "service_worker": "worker.js", "type": "module" },
+  "action": { "default_title": "REcombat · LSS Bridge", "default_popup": "popup.html" },
+  "content_scripts": [
+    {
+      "matches": ["https://longstoryshort.app/characters/*"],
+      "js": ["lss.js"],
+      "world": "MAIN",
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["https://longstoryshort.app/characters/*"],
+      "js": ["source-relay.js"],
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["https://toaldo27.github.io/REcombat/background.html*"],
+      "js": ["receiver.js"],
+      "all_frames": true,
+      "run_at": "document_start"
+    }
+  ]
+}

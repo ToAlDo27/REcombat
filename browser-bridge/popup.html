@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>REcombat · LSS Bridge</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main>
+      <h1>REcombat · LSS Bridge</h1>
+      <p>Инициатива из обычной вкладки LSS</p>
+      <label for="rooms">Комната Owlbear</label>
+      <select id="rooms" aria-label="Комната Owlbear"></select>
+      <div class="buttons">
+        <button id="connect">Подключить</button>
+        <button id="disconnect" class="quiet">Отключить</button>
+      </div>
+      <p id="active" role="status"></p>
+      <p id="last"></p>
+      <p class="hint">
+        В карточке токена сохраните ссылку на персонажа и включите приём инициативы из
+        LSS. Обе вкладки должны быть открыты в этом браузере.
+      </p>
+      <p class="hint">Прототип 0.1.0 · требуется REcombat 1.3.0</p>
+    </main>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

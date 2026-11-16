@@ -5,6 +5,11 @@ import react from "@vitejs/plugin-react"
 export default defineConfig({
   root: fileURLToPath(new URL("../../", import.meta.url)),
   plugins: [react()],
+  server: { hmr: false },
+  optimizeDeps: {
+    entries: ["index.html", "background.html", "audio.html", "token.html"],
+    include: ["events"],
+  },
   resolve: {
     alias: [
       {
